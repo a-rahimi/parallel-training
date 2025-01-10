@@ -1,9 +1,9 @@
 # General Parallelism to Train Deep Nets
 
 There are several ways to train large neural networks with the help of multiple
-GPUs.  The prominent categories are Pipeline Parallelism,  Data Parallelism,
+GPUs.  The prominent categories are Pipeline Parallelism (aka GPipe),  Data Parallelism,
 and Tensor Parallelism.  Each of these categories comes in complex flavors, like
-Looped Pipeline Parallelism, or Fully Sharded Pipeline Parallelism. On the
+Looped Pipeline Parallelism (LPP), or Fully Sharded Pipeline Parallelism (FSDP). On the
 surface, these forms of parallelism appear so different that they're each
 implemented with different code bases. For example, PyTorch implements Data
 Parallism under `torch.nn.parallel.DistributedDataParallel`, Fully Sharded Data
@@ -12,8 +12,8 @@ are implemented under `torch.distributed.pipelining`.  But inspecting these
 schemes more closely reveals that they're in fact minor modifications of each
 other.
 
-This document shows that all these schemes are just variants of a master
-schedule,  parameterized by just two functions: A function that maps a work unit
+This document shows that all these schemes are just instances of the same master
+schedule, parameterized by just two functions: A function that maps a work unit
 to a compute worker, and a second function that maps each stage of the pipeline
 to a worker that stores the source of truth for that stage's weights.  Together,
 these two functions specify the schedule of computation and the implied transfer
@@ -30,13 +30,6 @@ between both schemes. We call this form of parallelism Fully Sharded Looped
 Pipeline Parallelism. The table below summarizes the performance tradeoff
 between the schemes we unify.
 
-This abstraction also lets us unify the disparate code
-bases under a single code base that's parameterized by just these two functions.
-The hope of this document is inspire a unified codebase where schedules are
-parameterized by the aforementioned compute and weight storage functions. This
-code base would be easier to debug and maintain, and will make it easier to
-explore the larger space of possible schedules.
-
 | Scheme | Constraints | Latency | Activation Transmissions per Worker | Weight Transmissions per Worker | Activation Storage per Worker | Weight Storage per Worker |
 | ----- | ------------- | --------- | -- | --------- | ----------- | ----- |
 | DDP   | $W=B$         | $S$       | 0  | 0       | $S$         | S     |
@@ -45,63 +38,25 @@ explore the larger space of possible schedules.
 | LPP   | $S\geq W=GR$  | $B+S/G-1$ | 2B | 0       | $\min(S,B)$ | $S/R$ |
 | FSLPP | $S\geq W=G^2$ | $B+S/G-1$ | 2B | $S/G-1$ | $\min(S,B)$ | 1     |
 
-**Table:**  Latency, network, and memory usage for the scheduels unified in this
+**Table:** _Latency, network, and memory usage for the schedules unified in this
 document. $W$ is the number of workers, $S$ is the depth of the network being trained,
 and $B$ is the number of microbatches. Looped models break $W$ into $G$ groups
 of $R$ workers. To keep the table simple, the numbers are in big-O notation.
 Equivalent, we'll assume all stages take a unit of time to execute, and all
-weights and activations take a unit of storage. 
+weights and activations take a unit of storage.
 
+This abstraction also lets us unify the disparate code
+bases under a single code base that's parameterized by just these two functions.
+The hope of this document is inspire a unified codebase where schedules are
+parameterized by the aforementioned compute and weight storage functions. This
+code base would be easier to debug and maintain, and will make it easier to
+explore the larger space of possible schedules.
 
-## Background: Training a pipeline with back-propagation
-
-To train a neural network, we compute the gradient of a loss function of the
-output of the neural network with respect to the parameters of each stage of the
-neural network's pipeline.  We'd like compute the gradients of output of an  $S$
-stage pipeline with respect to the weights of each of the stages.  Each stage
-$s$ is a function $f_s$ parameterized by weights $w_s$. Each stage maps its
-input $x_s$ to an output $x_{s+1}$:
-
-$$x_{s+1} = f_s(x_s, w_s).$$
-
-The input of the pipeline is $x_0$, and $x_S$ is the resulting scalar loss
-(meaning the final stage computes the loss). To compute the gradient of
-$x_{S-1}$ with respect to each $w_0\ldots w_{S-1}$, we execute  a backward pass
-where each stage $s$ computes, recursively, the gradient of the loss with
-respect to its activations:
-
-$$\frac{\partial x_S}{\partial x_s} = \frac{\partial x_S}{\partial x_{s+1}} \frac{\partial x_{s+1}}{\partial x_{s}},$$
-
-From this, each stage computes the gradient of the loss with respect to the stage's parameters:
-
-$$\frac{\partial x_S}{\partial w_s} = \frac{\partial x_S}{\partial x_{s+1}} \frac{\partial x_{s+1}}{\partial w_{s}}.$$
-
-These operations can be written in a compact operator form:
-$$\begin{align}
-x_{s+1} &= F_s \; x_s \\
-z_s &= B_s(x_s) \; z_{s+1}
-\end{align}$$
-
-The forward operator $F_s$ applies the function $f_s(\cdot, w_s)$.  For the backward pass,
-defined $z_s \equiv (\frac{\partial x_T}{\partial x_s}, \frac{\partial x_T}{\partial w_s})$ 
-to capture the state of the backward iteration, and an
-operator $B_s(x_s)$ parametrized by the forward activations $x_s$ that
-right-multiplies $z_{s+1}$ by the matrix
-$\begin{bmatrix}
-\frac{\partial }{\partial x_s}f_s(x_s,w_s) & \frac{\partial }{\partial w_s}f_s(x_s, w_s) \\
-0 & 0 \\
-\end{bmatrix}$.
-
-We are to apply the above pipeline on $B$ mini-batches of data at once without
-changing the parameters of the pipeline in the interim. We'll use a superscript
-on the inputs, activations, and results generated during the backward pass to
-denote each mini-batch, with $x_s^b$ denoting the input of stage $s$ from the
-$b$th mini-batch.
 
 ## Distributing back-propagation
 
-Putting the notation above together, our job is to compute, with the help of $W$
-workers, the following set of operations:
+Our job is to compute, with the help of $W$ workers, the following set of operations:
+
 $$\begin{align}
 x_{s+1}^b &= F_s \; x_s^b \\
 z_s^b &= B_s(x_s^b) \; z_{s+1}^b\\
@@ -111,6 +66,7 @@ s &\in [0, S), \; b \in [0, B),
 where  $S$ is the number of stages, $B$ is the number of mini-batches, $x_s^b$
 is the output of stge $s$ on mini-batch $b$, and $z_s^b$ is the corresponding
 backward iterate. $F_s$ and $B_s$ are the forward and backward operators for stage $s$.
+See the appendix for formal definitions of the forward and backward operators.
 
 ### Formal definitions of distributed schedules
 
@@ -486,3 +442,48 @@ def worker_prefetch_thread(w: Worker):
 The code above depends on $w_\text{compute}$ only through the `available_work`
 function.  It depends on $w_\text{weights}$ through the `await_gradients`,
 `await_activations` and their prefetch varaiants.  
+
+## Appendix: Training a pipeline with back-propagation
+
+To train a neural network, we compute the gradient of a loss function of the
+output of the neural network with respect to the parameters of each stage of the
+neural network's pipeline.  We'd like compute the gradients of output of an  $S$
+stage pipeline with respect to the weights of each of the stages.  Each stage
+$s$ is a function $f_s$ parameterized by weights $w_s$. Each stage maps its
+input $x_s$ to an output $x_{s+1}$:
+
+$$x_{s+1} = f_s(x_s, w_s).$$
+
+The input of the pipeline is $x_0$, and $x_S$ is the resulting scalar loss
+(meaning the final stage computes the loss). To compute the gradient of
+$x_{S-1}$ with respect to each $w_0\ldots w_{S-1}$, we execute  a backward pass
+where each stage $s$ computes, recursively, the gradient of the loss with
+respect to its activations:
+
+$$\frac{\partial x_S}{\partial x_s} = \frac{\partial x_S}{\partial x_{s+1}} \frac{\partial x_{s+1}}{\partial x_{s}},$$
+
+From this, each stage computes the gradient of the loss with respect to the stage's parameters:
+
+$$\frac{\partial x_S}{\partial w_s} = \frac{\partial x_S}{\partial x_{s+1}} \frac{\partial x_{s+1}}{\partial w_{s}}.$$
+
+These operations can be written in a compact operator form:
+$$\begin{align}
+x_{s+1} &= F_s \; x_s \\
+z_s &= B_s(x_s) \; z_{s+1}
+\end{align}$$
+
+The forward operator $F_s$ applies the function $f_s(\cdot, w_s)$.  For the backward pass,
+defined $z_s \equiv (\frac{\partial x_T}{\partial x_s}, \frac{\partial x_T}{\partial w_s})$ 
+to capture the state of the backward iteration, and an
+operator $B_s(x_s)$ parametrized by the forward activations $x_s$ that
+right-multiplies $z_{s+1}$ by the matrix
+$\begin{bmatrix}
+\frac{\partial }{\partial x_s}f_s(x_s,w_s) & \frac{\partial }{\partial w_s}f_s(x_s, w_s) \\
+0 & 0 \\
+\end{bmatrix}$.
+
+We are to apply the above pipeline on $B$ mini-batches of data at once without
+changing the parameters of the pipeline in the interim. We'll use a superscript
+on the inputs, activations, and results generated during the backward pass to
+denote each mini-batch, with $x_s^b$ denoting the input of stage $s$ from the
+$b$th mini-batch.
