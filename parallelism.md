@@ -12,10 +12,10 @@ are implemented under `torch.distributed.pipelining`.  But inspecting these
 schemes more closely reveals that they're in fact minor modifications of each
 other.
 
-This document shows that all these schemes are just instances of the same master
-schedule, parameterized by just two functions: A function that maps a work unit
-to a compute worker, and a second function that maps each stage of the pipeline
-to a worker that stores the source of truth for that stage's weights.  Together,
+All these schemes turn out to be instances of the same master schedule,
+parameterized by just two functions: A function that maps a work unit to a
+compute worker, and a second function that maps each stage of the pipeline to a
+worker that stores the source of truth for that stage's weights.  Together,
 these two functions specify the schedule of computation and the implied transfer
 of weight and activation data. Changing these two functions produces the entire
 spectrium of distributed trainig algorithms. Along the way, we also discover
@@ -31,27 +31,32 @@ Pipeline Parallelism. The table below summarizes the performance tradeoff
 between the schemes we unify.
 
 | Scheme | Constraints | Latency | Activation Transmissions per Worker | Weight Transmissions per Worker | Activation Storage per Worker | Weight Storage per Worker |
-| ----- | ------------- | --------- | -- | --------- | ----------- | ----- |
-| DDP   | $W=B$         | $S$       | 0  | 0       | $S$         | S     |
-| FSDP  | $W=B$         | $S$       | 0  | $S-1$   | $S$         | 1     |
-| GPipe | $W=S$         | $B+S-1$   | 2B | 0       | $S$         | 1     |
-| LPP   | $S\geq W=GR$  | $B+S/G-1$ | 2B | 0       | $\min(S,B)$ | $S/R$ |
-| FSLPP | $S\geq W=G^2$ | $B+S/G-1$ | 2B | $S/G-1$ | $\min(S,B)$ | 1     |
+| ----- | ------------------- | --------- | -- | ------- | --- | ----- |
+| DDP   | $W=B$               | $S$       | 0  | 0       | $S$ | S     |
+| FSDP  | $W=B$               | $S$       | 0  | $S-1$   | $S$ | 1     |
+| GPipe | $W=S$               | $B+S-1$   | 2B | 0       | $S$ | 1     |
+| LPP   | $B\geq S\geq W=GR$  | $B+S/G-1$ | 2B | 0       | $S$ | $S/R$ |
+|       | $S\geq W=GR \geq B$ | $S$       | 2B | 0       | $S$ | $S/R$ |
+| FSLPP | $B\geq S\geq W=G^2$ | $B+S/G-1$ | 2B | $S/G-1$ | $S$ | 1     |
+|       | $S\geq W=GR \geq B$ | $S$       | 2B | $S/G-1$ | $S$ | $1$ |
 
 **Table:** _Latency, network, and memory usage for the schedules unified in this
 document. $W$ is the number of workers, $S$ is the depth of the network being trained,
 and $B$ is the number of microbatches. Looped models break $W$ into $G$ groups
 of $R$ workers. To keep the table simple, the numbers are in big-O notation.
 Equivalent, we'll assume all stages take a unit of time to execute, and all
-weights and activations take a unit of storage.
+weights and activations take a unit of storage._
 
-This abstraction also lets us unify the disparate code
-bases under a single code base that's parameterized by just these two functions.
-The hope of this document is inspire a unified codebase where schedules are
-parameterized by the aforementioned compute and weight storage functions. This
-code base would be easier to debug and maintain, and will make it easier to
-explore the larger space of possible schedules.
+This abstraction also lets us unify the disparate code bases into a single code
+base that's parameterized by just these two functions.  This code base would be
+easier to debug and maintain, and will make it easier to explore the larger
+space of possible schedules.
 
+A few insights emerge from this analysis:
+
+* A main problem with all the approaches is that they all require activation storage on the order of $S$. With variants of Pipeline Parallelism, however, when the number of mini batches is smaller than the number of stages ($B<S$), activation storage becomes proportional to $B$. This regime is impossible for FSDP, since it requires the the number of works to match exactly the number of batches. PP variants support this configuration, but with poor utilization.
+
+* If we adopt the proposed code base, the analysis and the consequence of these observations has low stakes. It becomes easy to experiment with different schedules without swapping out the underlying distributed training library.
 
 ## Distributing back-propagation
 
@@ -63,10 +68,10 @@ z_s^b &= B_s(x_s^b) \; z_{s+1}^b\\
 s &\in [0, S), \; b \in [0, B),
 \end{align}$$
 
-where  $S$ is the number of stages, $B$ is the number of mini-batches, $x_s^b$
-is the output of stge $s$ on mini-batch $b$, and $z_s^b$ is the corresponding
-backward iterate. $F_s$ and $B_s$ are the forward and backward operators for stage $s$.
-See the appendix for formal definitions of the forward and backward operators.
+Here, $S$ is the number of stages of the pipeline, $B$ is the number of
+mini-batches, $x_s^b$ is the output of stage $s$ on mini-batch $b$, and $z_s^b$
+is the corresponding backward iterate. $F_s$ and $B_s$ are the forward and
+backward operators for stage $s$.  See the appendix for formal definitions of these quantities.
 
 ### Formal definitions of distributed schedules
 

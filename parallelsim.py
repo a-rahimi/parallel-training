@@ -225,19 +225,28 @@ class SimulationStats:
             f.write(self.render_work_produced()._repr_html_())
         return self
 
-    def _repr_html_(self):
+    def worker_stats(self) -> pd.DataFrame:
+        df = self.df_worker_stats.copy()
+
+        # Delete 'Activation storage'. It'll just be 0. We care about peak
+        # activation storage.
         assert (
-            self.df_worker_stats["Activation storage"] == 0
+            df["Activation storage"] == 0
         ).all(), "There is a bug in the simulator. Every forward must have a matching backward."
-        del self.df_worker_stats["Activation storage"]
+        del df["Activation storage"]
 
+        # Populate 'Weight storage' by counting the number of stages for each worker
+        # where w_compute was = w_storage.
         for worker, stages in self.worker_weight_storage.items():
-            self.df_worker_stats.loc[worker, "Weight storage"] = len(stages)
+            df.loc[worker, "Weight storage"] = len(stages)
 
+        return df
+
+    def _repr_html_(self):
         return (
             self.render_work_produced()._repr_html_()
             + "<br>\n"
-            + self.df_worker_stats._repr_html_()
+            + self.worker_stats()._repr_html_()
         )
 
 
