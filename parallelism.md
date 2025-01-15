@@ -54,7 +54,7 @@ space of possible schedules.
 
 A few insights emerge from this analysis:
 
-* A main problem with all the approaches is that they all require activation storage on the order of $S$. With variants of Pipeline Parallelism, however, when the number of mini batches is smaller than the number of stages ($B<S$), activation storage becomes proportional to $B$. This regime is impossible for FSDP, since it requires the the number of works to match exactly the number of batches. PP variants support this configuration, but with poor utilization.
+* A main problem with all the approaches is that they all require activation storage on the order of $S$. With variants of Pipeline Parallelism, however, when the number of mini batches is smaller than the number of stages ($B<S$), activation storage becomes proportional to $B$. This regime is impossible for FSDP, since FSDPR requires the the number of workers to match exactly the number of batches. PP variants support this configuration, but with poor utilization.
 
 * If we adopt the proposed code base, the analysis and the consequence of these observations has low stakes. It becomes easy to experiment with different schedules without swapping out the underlying distributed training library.
 
@@ -64,7 +64,7 @@ Our job is to compute, with the help of $W$ workers, the following set of operat
 
 $$\begin{align}
 x_{s+1}^b &= F_s \; x_s^b \\
-z_s^b &= B_s(x_s^b) \; z_{s+1}^b\\
+z_s^b &= B_s(x_s^b) \; z_{s+1}^b \\
 s &\in [0, S), \; b \in [0, B),
 \end{align}$$
 

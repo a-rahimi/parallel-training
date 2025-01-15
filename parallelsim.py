@@ -93,9 +93,13 @@ class SimulationStats:
     def __init__(
         self,
         num_workers: int,
+        num_stages: int,
+        num_batches: int,
         schedule: Callable[[Stage, Batch], ComputeAndWeightWorkers],
     ) -> None:
         self.num_workers = num_workers
+        self.num_stages = num_stages
+        self.num_batches = num_batches
         self.schedule = schedule
 
         self.all_work: List[WorkHistory] = []
@@ -174,7 +178,7 @@ class SimulationStats:
                 border: 1px solid {matplotlib.colors.to_hex(color * 0.9)};
             }}
             """
-        time_header = "".join(f"<th>{t+1}</th>" for t in range(self.max_time()))
+        time_header = "".join(f"<th>{t + 1}</th>" for t in range(self.max_time()))
         content = "\n".join(
             f"<tr><td>w{worker}</td>" + "".join(pipeline_diagram_row) + "</tr>"
             for worker, pipeline_diagram_row in enumerate(pipeline_diagram)
@@ -230,9 +234,9 @@ class SimulationStats:
 
         # Delete 'Activation storage'. It'll just be 0. We care about peak
         # activation storage.
-        assert (
-            df["Activation storage"] == 0
-        ).all(), "There is a bug in the simulator. Every forward must have a matching backward."
+        assert (df["Activation storage"] == 0).all(), (
+            "There is a bug in the simulator. Every forward must have a matching backward."
+        )
         del df["Activation storage"]
 
         # Populate 'Weight storage' by counting the number of stages for each worker
@@ -242,9 +246,30 @@ class SimulationStats:
 
         return df
 
+    def aggregate_stats(self) -> pd.DataFrame:
+        df_worker_stats = self.worker_stats()
+        df = pd.DataFrame(
+            pd.Series(
+                {
+                    "Throughput per worker (jobs / time / worker)": self.num_stages
+                    * self.num_batches
+                    * len(Direction)
+                    / self.max_time()
+                    / self.num_workers,
+                    "Max activation storage for a worker": df_worker_stats[
+                        "Max activation storage"
+                    ].max(),
+                }
+            )
+        )
+        df.columns = ["Aggegrate Metrics"]
+        return df
+
     def _repr_html_(self):
         return (
-            self.render_work_produced()._repr_html_()
+            self.aggregate_stats()._repr_html_()
+            + "<br>\n"
+            + self.render_work_produced()._repr_html_()
             + "<br>\n"
             + self.worker_stats()._repr_html_()
         )
@@ -257,18 +282,30 @@ def simulate(
     schedule: Callable[[Stage, Batch], ComputeAndWeightWorkers],
     priority_order: Callable[[Stage, Batch, Direction], int] = None,
 ) -> SimulationStats:
+    # Simulate a set of workers that greedily grab the next job from a DAG of
+    # jobs. A pleasant aspect of this simulation is that it doesn't maintain a
+    # global clock. Instead, the clock is distributed across various data
+    # structures.
+
     if priority_order is None:
         priority_order = BackwardFirst(num_stages, num_batches)
-    stats = SimulationStats(num_workers, schedule)
+    stats = SimulationStats(num_workers, num_stages, num_batches, schedule)
 
+    # The execution frontier is the set of work that has already executed,
+    # but which have descendents that have not yet executed.
     execution_frontier: Set[Work] = set(
         Work(-1, batch, Direction.FORWARD) for batch in range(num_batches)
     )
+    # For work that has already been simulated, these dictionaries track when
+    # the work started and ended.
     work_start_time: Dict[Work, Timestamp] = {work: 0 for work in execution_frontier}
     work_end_time: Dict[Work, Timestamp] = {work: 0 for work in execution_frontier}
+
+    # When each worker becomes free next.
     worker_busy_until: Dict[Worker, Timestamp] = collections.defaultdict(lambda: 0)
 
     while execution_frontier:
+        # Find work that can execute the earliest.
         r: List[Tuple[Timestamp, Work, Work, Worker]] = []
         for work in execution_frontier:
             new_work = work.next(num_stages)
@@ -276,23 +313,24 @@ def simulate(
             when_work_can_start = max(worker_busy_until[worker], work_end_time[work])
             priority = priority_order(work)
             r.append((when_work_can_start, priority, work, new_work, worker))
-
         when_work_can_start, priority, old_work, new_work, new_worker = min(r)
 
+        # Replace the work work with its descendent.
         execution_frontier.remove(old_work)
         execution_frontier.add(new_work)
+
         work_start_time[new_work] = when_work_can_start
         work_end_time[new_work] = worker_busy_until[new_worker] = (
             when_work_can_start + new_work.duration()
-        )
-
-        stats.add(
-            old_work, new_work, work_start_time[new_work], work_end_time[new_work]
         )
 
         # Remove finished work from the frontier.
         execution_frontier = {
             work for work in execution_frontier if not work.is_final()
         }
+
+        stats.add(
+            old_work, new_work, work_start_time[new_work], work_end_time[new_work]
+        )
 
     return stats
