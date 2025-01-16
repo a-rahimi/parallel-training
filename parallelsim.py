@@ -1,4 +1,4 @@
-from typing import Callable, Dict, List, NamedTuple, Set, Tuple
+from typing import Callable, Dict, Iterable, List, NamedTuple, Set, Tuple
 
 import collections
 import dataclasses as dc
@@ -55,9 +55,9 @@ class ComputeAndWeightWorkers(NamedTuple):
     weight_worker: Worker
 
 
-@dc.dataclass(frozen=True)
 class PriorityOrder:
-    order: Dict[Work, int]
+    def __init__(self, work_order: Iterable[Work]):
+        self.order = {work: n for n, work in enumerate(work_order)}
 
     def __call__(self, work: Work) -> int:
         return self.order[work]
@@ -66,28 +66,20 @@ class PriorityOrder:
 class OldestStageFirst(PriorityOrder):
     def __init__(self, num_stages: int, num_batches: int):
         super().__init__(
-            {
-                Work(stage, batch, direction): n
-                for n, (stage, direction, batch) in enumerate(
-                    itertools.product(
-                        range(-1, num_stages), Direction, range(num_batches)
-                    )
-                )
-            }
+            Work(stage, batch, direction)
+            for stage, direction, batch in itertools.product(
+                range(-1, num_stages), Direction, range(num_batches)
+            )
         )
 
 
 class OldestBatchFirst(PriorityOrder):
     def __init__(self, num_stages: int, num_batches: int):
         super().__init__(
-            {
-                Work(stage, batch, direction): n
-                for n, (batch, direction, stage) in enumerate(
-                    itertools.product(
-                        range(num_batches), Direction, range(-1, num_stages)
-                    )
-                )
-            }
+            Work(stage, batch, direction)
+            for batch, direction, stage in itertools.product(
+                range(num_batches), Direction, range(-1, num_stages)
+            )
         )
 
 
@@ -116,6 +108,7 @@ class SimulationStats:
                 "Activation transmissions",
                 "Activation storage",
                 "Max activation storage",
+                "Busy time",
             ],
             dtype=int,
         )
@@ -132,6 +125,9 @@ class SimulationStats:
         start_time: Timestamp,
         end_time: Timestamp,
     ) -> None:
+        if end_time < start_time:
+            raise ValueError("end_time must be >= start_time")
+
         frontier_worker = self.schedule(frontier_work).compute_worker
         new_worker, weight_worker = self.schedule(new_work)
 
@@ -139,6 +135,8 @@ class SimulationStats:
         self.all_work.append(WorkHistory(new_work, start_time, end_time, new_worker))
 
         worker_stats = self.df_worker_stats.loc[new_worker]
+
+        worker_stats["Busy time"] += end_time - start_time
 
         # This work doesn't own its weights. Grab them from the owner.
         worker_stats["Weight transmissions"] += new_worker != weight_worker
@@ -290,13 +288,21 @@ class SimulationStats:
         )
 
     def _repr_html_(self):
-        return (
-            self.aggregate_stats()._repr_html_()
-            + "<br>\n"
-            + self.render_work_produced()._repr_html_()
-            + "<br>\n"
-            + self.worker_stats()._repr_html_()
-        )
+        df_worker_stats = self.worker_stats()
+        if self.num_workers < 10:
+            return (
+                self.aggregate_stats()._repr_html_()
+                + "<br>\n"
+                + self.render_work_produced()._repr_html_()
+                + "<br>\n"
+                + df_worker_stats._repr_html_()
+            )
+
+        # For larger simulations, report per-worker stats as graphs.
+        df_worker_stats["Utilization"] = df_worker_stats["Busy time"] / self.end_time()
+        df_worker_stats.plot(kind="bar", y="Max activation storage", figsize=(10, 2))
+        df_worker_stats.plot(kind="bar", y="Utilization", figsize=(10, 2))
+        return self.aggregate_stats()._repr_html_()
 
 
 def simulate(
