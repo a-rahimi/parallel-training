@@ -273,6 +273,7 @@ class SimulationStats:
         return pd.DataFrame(
             pd.Series(
                 {
+                    "Latency": self.end_time(),
                     "Worker throughput (jobs / time / worker)": len(self.all_work)
                     / self.end_time()
                     / self.num_workers,
