@@ -66,9 +66,9 @@ only one stage, and pages in the weights of the other stages it must process
 from other workers as needed.
 
 The table below summarizes the performance tradeoff between these schemes. To
-keep the table simple and the subsequent analyses simple, we assume stages
-require identical compute and produce idential activations.  The model and the
-code don't rely on these simplifications.
+keep the table simple, we assume the stages of the pipeline are identical in the
+amount of computation they perform and in the shapes of their inputs and
+outputs.  
 
 
 | Scheme | Constraints | Latency&nbsp;&nbsp;&nbsp;&nbsp; |  Activation Xmit per Worker | Weight Xmit per Worker | Activation Storage per Worker | Weight Storage per Worker |
@@ -79,7 +79,7 @@ code don't rely on these simplifications.
 | Looped PP (LPP)                  | $W=GR$       | $S+\frac{B}{G}-1$ |  $B$  | 0       | $\frac{S}{R}\min\left(S,\frac{B}{G}\right)$ | $\frac{S}{R}$ |
 | Fully Sharded LPP (FSLPP)        | $W=GR$       | $S+\frac{B}{G}-1$ |  $B$  | $S-1$   | $\frac{S}{R}\min\left(S,\frac{B}{G}\right)$ | 1     |
 
-**Table:** _Latency, network, and memory usage for the schedules unified in this
+**Table 1:** _Latency, network, and memory usage for the schedules unified in this
 document. $W$ is the number of workers, $S$ is the depth of the network being
 trained, and $B$ is the number of microbatches. Looped models break $W$ into $G$
 groups of $R$ workers.  The formulas assume computing a forward and backward step
@@ -90,11 +90,11 @@ computation simple, we assume that transmission latencies can be hidden by
 overlapping them with compute._
 
 
-Some useful patterns emerge from the table above. In LPP, the workers are split
-into $G$ groups of $R$ workers each.  LPP's performance smoothly interpolates
-between that of PP and DPP as $R$ and $G$ are varied: When $G=1$ and $R=S$, LPP
-is identical to PP. When $G=B$ and $R=1$, LPP is identical to DDP. We take
-advantage of this observation below to unify these algorithms under one
+Some useful patterns emerge from the table above.  LPP's performance smoothly
+interpolates between that of PP and DPP as $G$, the number of worker groups, and
+$R$, the number of workers in each group are varied: When $G=1$ and $R=S$, LPP
+is identical to PP. When $G=B$ and $R=1$, LPP is identical to DDP. We'll take
+advantage of this observation to unify these algorithms under one
 implementation.  The activation storage for each worker under LPP can be reduced
 by either increasing either $R$ or $G$. An attractive regime is when the number
 of workers scales far beyond the number of batches and stages, with $W=\epsilon
@@ -103,7 +103,7 @@ $G=\epsilon B$ and the number of workers in each group to $R=S$ causes the
 latency to be $S+\frac{1}{\epsilon}-1$, the activation storage for each worker
 to be $\frac{1}{\epsilon}$, and have each worker store just one set of weights.
 Concretely, with $\epsilon=\tfrac{1}{2}$, the latency of LPP becomes $S+1$,
-almost as low as that of DDP, yet each node need store at most two sets of
+almost as low as that of DDP, yet each worker need store at most two sets of
 activations and just one set of weights at any time. We show below that this
 configuration almost achieves the best possible utilization for the workers
 given the activation memory constraints.
@@ -356,24 +356,16 @@ otherwise resolved by the $\text{pred}$ function.
 
 ## Looped Pipeline Parallelism has nearly optimal latency subject to activation storage constraints
 
-LPP has some appealing practical properties:
-
-1. It can accommodate more workers than there are stages or batches. Whereas DDP
-requires $W=B$ and GPipre requires $W=S$, LPP can have $W=\epsilon SB$ for any
-$\epsilon \in (0,1)$. This offers more memory and the potentiaal for more
-parallelism.
-
-2. Its latency, $L\equiv S+\frac{B}{G}-1$, drops as $W$ increases, assuming $G$ increases with $W$.
-
-3. The maximum activation storage for a worker, $M\equiv \frac{S}{R}\min\left(S,\frac{B}{G}\right)$, drops as $W$ increases assuming both $G$ and $R$ increase as $W$ increases.
-
-4. The weight storage per worker, $S/R$, also drops as $W$ increases, assuming $R$ increases with $W$.
-
-It turns out that the scaling behavior of LPP is nearly optimal, meaning any
-improvements on this behavior is due to affects not modeled in Table 1 above
-(for example, the stages are not identical, or because not all communication
-latencies can be hidden). To prove this, we'll need the following definition and
-upper bound:
+Under the foregoing model, DDP and FSDP make optimal use of the workers: They
+are occupied at all time, performing useful computations. But when activation
+memory is constrainted, the DDP family of models can't be applied. It turns out
+that for any bound on the activation memory, there is a configuration of LPP
+that also nearly optimally occupies the workers, which makes the LPP family of
+schedules more versatile than the DDP family.  The implication is that any
+improvements on the LPP family of models is due to affects not modeled in Table
+1 above (for example, the stages are not identical, or because not all
+communication latencies can be hidden). To formalize this claim, we'll need the
+following definition and upper bound:
 
 **Definition:** The throughput per worker $\rho$ is the number of jobs the average worker finishes per unit time under a schedule. We denote this by $\rho \equiv \frac{SB}{L W}$, where $L$ is the latency of the schedule.
 
