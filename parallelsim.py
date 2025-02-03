@@ -288,22 +288,22 @@ class SimulationStats:
             )
         )
 
-    def _repr_html_(self):
+    def _repr_html_(self) -> None:
         df_worker_stats = self.worker_stats()
         if self.num_workers < 10:
-            return (
-                self.aggregate_stats()._repr_html_()
-                + "<br>\n"
-                + self.render_work_produced()._repr_html_()
-                + "<br>\n"
-                + df_worker_stats._repr_html_()
+            display.display(self.aggregate_stats())
+            display.display(self.render_work_produced())
+            display.display(df_worker_stats)
+        else:
+            # For larger simulations, report per-worker stats as graphs.
+            df_worker_stats["Utilization"] = (
+                df_worker_stats["Busy time"] / self.end_time()
             )
-
-        # For larger simulations, report per-worker stats as graphs.
-        df_worker_stats["Utilization"] = df_worker_stats["Busy time"] / self.end_time()
-        df_worker_stats.plot(kind="bar", y="Max activation storage", figsize=(10, 2))
-        df_worker_stats.plot(kind="bar", y="Utilization", figsize=(10, 2))
-        return self.aggregate_stats()._repr_html_()
+            df_worker_stats.plot(
+                kind="bar", y="Max activation storage", figsize=(10, 2)
+            )
+            df_worker_stats.plot(kind="bar", y="Utilization", figsize=(10, 2))
+            display.display(self.aggregate_stats())
 
 
 def simulate(
