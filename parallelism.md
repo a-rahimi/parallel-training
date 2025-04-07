@@ -75,7 +75,7 @@ outputs.
 | - | - | - | - | - | - | - |
 | Distributed Data Parallel (DDP)  | $W=B$        | $S$               |  0     | 0       | $S$         | $S$   |
 | Fully Sharded DDP (FSDP)         | $W=B$        | $S$               |  0     | $S-1$   | $S$         | 1     |
-| Pipeline Parallel (PP)           | $W=S$        | $B+S-1$           |  $B$  | 0       | $\min(S,B)$         | 1     |
+| Vanilla Pipeline Parallel (GPipe)           | $W=S$        | $B+S-1$           |  $B$  | 0       | $\min(S,B)$         | 1     |
 | Looped PP (LPP)                  | $W=GR$       | $S+\frac{B}{G}-1$ |  $B$  | 0       | $\frac{S}{R}\min\left(S,\frac{B}{G}\right)$ | $\frac{S}{R}$ |
 | Fully Sharded LPP (FSLPP)        | $W=GR$       | $S+\frac{B}{G}-1$ |  $B$  | $S-1$   | $\frac{S}{R}\min\left(S,\frac{B}{G}\right)$ | 1     |
 
@@ -242,9 +242,9 @@ must still store all the activations for every stage, which again introduces
 thrashing.
 
 
-In Pipeline Parallelism, aka [GPipe](https://arxiv.org/abs/1811.06965), there is
-a one-to-one correspondence between workers and stages.
-Each worker processes every batch, but only at the stage assigned to the worker:
+In vanilla Pipeline Parallelism, aka [GPipe](https://arxiv.org/abs/1811.06965),
+there is a one-to-one correspondence between workers and stages.  Each worker
+processes every batch, but only at the stage assigned to the worker:
 
 ![](GPipe.png)
 

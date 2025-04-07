@@ -315,7 +315,7 @@ def simulate(
 ) -> SimulationStats:
     # Simulate a set of workers that greedily grab the next job from a DAG of
     # jobs. A pleasant aspect of this simulation is that it's tickless, and it
-    # doesn't doesn't maintain a global clock. Instead of monotonically
+    # doesn't maintain a global clock. Instead of monotonically
     # advancing a clock at each round of simulation, it finds the work that can
     # be executed the earliest, and deduces time from it. This simulates the
     # asynchronous behavior of the workers more closely than a tick-based
