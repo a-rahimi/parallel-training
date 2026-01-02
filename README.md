@@ -1,13 +1,13 @@
-<!---
-"lang": "en",
-"title": "Unifying Parallelization Schemes to Train Deep Nets",
-"subtitle": "",
-"authors": ["Ali Rahimi"],
-"adresses": [],
-"date": "Jan 2025",
-"description": "",
-"tags": ""
---->
+---
+lang: en
+title: Unifying Parallelization Schemes to Train Deep Nets
+subtitle: 
+author: 
+- Ali Rahimi
+date: Jan 2025
+description: 
+tags: 
+---
 # Introduction
 
 There are several strategies to train large neural networks over multiple GPUs.
