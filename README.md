@@ -1,4 +1,4 @@
----
+<!---
 "lang": "en",
 "title": "Unifying Parallelization Schemes to Train Deep Nets",
 "subtitle": "",
@@ -7,10 +7,7 @@
 "date": "Jan 2025",
 "description": "",
 "tags": ""
----
-<script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-</script>
+--->
 # Introduction
 
 There are several strategies to train large neural networks over multiple GPUs.
@@ -446,7 +443,7 @@ toward job preferred by $n(s,b,d)$.
 After $2\times S\times B$ iterations, $J$ will contain all jobs. The latency of
 the pipeline can be read from $t(j)$:
 
-$$\text{latency of the pipeline} = \max_j\; t(j).$$
+$$\text{latency of the pipeline} = \max_j t(j).$$
 
 Some statistics of the schedule can be computed more directly from $w(s,b,d)$,
 and don't need the full weight of the simulator. The number of times worker $w$
@@ -490,7 +487,7 @@ until the backward pass has executed. So $x_s^b$ must remain live for at least
 $2(S-s)+1$ time steps. To illustrate, here is the compute graph for the
 backpropagation equations for a four stage pipeline:
 
-<pre class="mermaid">
+```mermaid
 flowchart-elk LR
 
     f0
@@ -508,7 +505,7 @@ flowchart-elk LR
     f1 --> b1
     f2 --> b2
     f3 --> b3
-</pre>
+```
 
 Each batch therefore requires $\sum_{s=0}^{S-1}
 2(S-s)-1 = S^2$ memory-time, so processing $B$ batches requires at least
